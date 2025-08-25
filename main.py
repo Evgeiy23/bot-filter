@@ -18,14 +18,16 @@ already_requested = set()
 processing = set()
 last_join_time = defaultdict(lambda: 0)
 spam_ban_until = defaultdict(lambda: 0)
+JOIN_COOLDOWN = 60  # секунд между join
 SPAM_BAN = 24 * 60 * 60  # бан на сутки в секундах
 
-user_names = {}  # храним user_id -> имя
+user_names = {}  # хранит user_id -> имя
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
-    user_names[message.from_user.id] = message.from_user.full_name
-    await bot.send_video(chat_id=message.chat.id, video=FSInputFile("video.mp4"))
+    user_id = message.from_user.id
+    user_names[user_id] = message.from_user.full_name
+    await bot.send_video(chat_id=user_id, video=FSInputFile("video.mp4"))
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="хочу в канал", callback_data="join_request")]
     ])
@@ -52,11 +54,9 @@ async def help_command(message: types.Message):
 @dp.callback_query(lambda c: c.data == "join_request")
 async def join_request_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
-    user_names[user_id] = callback_query.from_user.full_name
+    user_name = callback_query.from_user.full_name
+    user_names[user_id] = user_name
     now = time.time()
-
-    # удаляем сообщение с кнопкой после нажатия
-    await callback_query.message.delete()
 
     if user_id in blacklist:
         await callback_query.message.answer("ты в чс :(")
@@ -72,7 +72,10 @@ async def join_request_callback(callback_query: types.CallbackQuery):
     if time_since_last < JOIN_COOLDOWN:
         spam_ban_until[user_id] = now + SPAM_BAN
         await callback_query.message.answer("ты слишком часто жмешь кнопку, бан на сутки")
-        await bot.send_message(admin_id, f"пользователь {user_names[user_id]} спамит кнопку, получил бан на сутки")
+        try:
+            await bot.send_message(admin_id, f"пользователь {user_name} спамит кнопку, получил бан на сутки")
+        except Exception:
+            pass
         await callback_query.answer()
         return
 
@@ -85,7 +88,7 @@ async def join_request_callback(callback_query: types.CallbackQuery):
     last_join_time[user_id] = now
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"{user_names[user_id]}", url=f"tg://user?id={user_id}")],
+        [InlineKeyboardButton(text=f"{user_name}", url=f"tg://user?id={user_id}")],
         [
             InlineKeyboardButton(text="одобрить", callback_data=f"approve:{user_id}"),
             InlineKeyboardButton(text="отклонить", callback_data=f"reject:{user_id}"),
@@ -95,8 +98,16 @@ async def join_request_callback(callback_query: types.CallbackQuery):
     try:
         await bot.send_message(admin_id, "хочет вступить:", reply_markup=keyboard)
         await callback_query.message.answer("брат, жди заявка у админа канала")
+    except Exception:
+        await callback_query.message.answer("не удалось отправить заявку админу")
     finally:
         processing.remove(user_id)
+
+    try:
+        await callback_query.message.delete()
+    except Exception:
+        pass
+
     await callback_query.answer()
 
 @dp.callback_query(lambda c: c.data.startswith(("approve", "reject", "blacklist", "unban")))
